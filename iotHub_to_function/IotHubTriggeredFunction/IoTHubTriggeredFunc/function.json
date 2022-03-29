@@ -1,0 +1,14 @@
+{
+  "bindings": [
+    {
+      "type": "eventHubTrigger",
+      "name": "IoTHubMessages",
+      "direction": "in",
+      "eventHubName": "",
+      "connection": "eventHubCompatibleEndpoint",
+      "cardinality": "one",
+      "consumerGroup": "$Default"
+    }
+  ],
+  "scriptFile": "../dist/IoTHubTriggeredFunc/index.js"
+}

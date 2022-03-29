@@ -1,0 +1,21 @@
+{
+  "bindings": [
+    {
+      "type": "signalR",
+      "name": "signalRMessages",
+      "hubName": "default",
+      "connectionStringSetting": "AzureSignalRConnectionString",
+      "direction": "out"
+    },
+    {
+      "type": "eventHubTrigger",
+      "name": "IoTHubMessages",
+      "direction": "in",
+      "eventHubName": "",
+      "connection": "myEventHubReadConnectionAppSetting",
+      "cardinality": "one",
+      "consumerGroup": "$Default"
+    }
+  ],
+  "scriptFile": "../dist/IoTHubTriggeredFunction/index.js"
+}

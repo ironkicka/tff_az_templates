@@ -1,4 +1,6 @@
 variable "db_password" {}
+variable "db_name" {}
+variable "db_user_name" {}
 
 terraform {
 
@@ -17,8 +19,18 @@ provider "azurerm" {
 }
 
 resource "azurerm_resource_group" "rg" {
-  name      = "function-to-db"
+  name      = "iothub-to-db"
   location  = var.resource_group_location
+}
+
+resource "azurerm_iothub" "my-iot-hub" {
+  name = "terra-iot-hub"
+  resource_group_name = azurerm_resource_group.rg.name
+  location = var.resource_group_location
+  sku {
+    capacity = 1
+    name     = "F1"
+  }
 }
 
 # vnet
@@ -55,7 +67,7 @@ resource "azurerm_private_dns_zone" "dns_zone" {
 
 #
 resource "azurerm_private_dns_zone_virtual_network_link" "pdz_vent_link" {
-  name                  = "wurvmaq5q4nfi"
+  name                  = "pdz-ventlink-${random_id.randomId.hex}"
   private_dns_zone_name = azurerm_private_dns_zone.dns_zone.name
   virtual_network_id    = azurerm_virtual_network.vnet1.id
   resource_group_name   = azurerm_resource_group.rg.name
@@ -66,7 +78,7 @@ resource "azurerm_mysql_flexible_server" "database_server" {
   name                = "terraform-db"
   resource_group_name = azurerm_resource_group.rg.name
   location = var.resource_group_location
-  administrator_login    = "test_db_admin"
+  administrator_login    = var.db_user_name
   administrator_password = var.db_password
   backup_retention_days  = 7
   delegated_subnet_id = azurerm_subnet.db_subnet.id
@@ -78,7 +90,7 @@ resource "azurerm_mysql_flexible_server" "database_server" {
 }
 
 resource "azurerm_mysql_flexible_database" "database" {
-  name                = "terraform_test"
+  name                = var.db_name
   resource_group_name = azurerm_resource_group.rg.name
   server_name         = azurerm_mysql_flexible_server.database_server.name
   charset             = "utf8"
@@ -93,10 +105,6 @@ resource "azurerm_public_ip" "bastion_public_ip" {
   location                     = var.resource_group_location
   resource_group_name          = azurerm_resource_group.rg.name
   allocation_method            = "Dynamic"
-
-  tags = {
-    environment = "Terraform Demo"
-  }
 }
 
 # Create Network Security Group and rule
@@ -117,9 +125,6 @@ resource "azurerm_network_security_group" "bastion_sg" {
     destination_address_prefix = "*"
   }
 
-  tags = {
-    environment = "Terraform Demo"
-  }
 }
 
 # bastion subnet
@@ -143,9 +148,6 @@ resource "azurerm_network_interface" "bastion_nic" {
     public_ip_address_id          = azurerm_public_ip.bastion_public_ip.id
   }
 
-  tags = {
-    environment = "Terraform Demo"
-  }
 }
 
 # Connect the security group to the network interface
@@ -171,10 +173,6 @@ resource "azurerm_storage_account" "mystorageaccount" {
   location                     = var.resource_group_location
   account_tier                = "Standard"
   account_replication_type    = "LRS"
-
-  tags = {
-    environment = "Terraform Demo"
-  }
 }
 
 # Create (and display) an SSH key
@@ -217,10 +215,6 @@ resource "azurerm_linux_virtual_machine" "myterraformvm" {
     storage_account_uri = azurerm_storage_account.mystorageaccount.primary_blob_endpoint
   }
 
-  tags = {
-    environment = "Terraform Demo"
-  }
-
 }
 
 # https://stackoverflow.com/questions/54088476/terraform-azurerm-virtual-machine-extension
@@ -236,11 +230,6 @@ resource "azurerm_virtual_machine_extension" "myextension" {
         "script": "${base64encode(file(var.script_file))}"
     }
   SETTINGS
-
-
-  tags = {
-    environment = "Terraform Demo"
-  }
 }
 
 resource "azurerm_service_plan" "myAppservicePlan" {
@@ -268,12 +257,11 @@ resource "azurerm_subnet" "subnet-for-vent-integration" {
 }
 
 resource "azurerm_app_service_virtual_network_swift_connection" "function_vnet_integration" {
-  app_service_id = azurerm_linux_function_app.myFunction.id
+  app_service_id = azurerm_function_app.myFunction.id
   subnet_id      = azurerm_subnet.subnet-for-vent-integration.id
 }
 
 data "azurerm_client_config" "current" {}
-
 
 resource "azurerm_key_vault" "myKeyVault" {
   name                = "terra-vault-2022"
@@ -301,20 +289,37 @@ resource "azurerm_key_vault_secret" "example" {
   key_vault_id = azurerm_key_vault.myKeyVault.id
 }
 
-resource "azurerm_linux_function_app" "myFunction" {
-  name                = "my-linux-function-app"
-  resource_group_name = azurerm_resource_group.rg.name
+resource "azurerm_application_insights" "myAppInsight" {
+  name                = "tf-test-appinsights"
   location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  application_type    = "Node.JS"
+}
 
-  storage_account_name = azurerm_storage_account.mystorageaccount.name
-  service_plan_id      = azurerm_service_plan.myAppservicePlan.id
-
-  site_config {}
+resource "azurerm_function_app" "myFunction" {
+  name                       = "my-iothub-triggered-function"
+  location                   = azurerm_resource_group.rg.location
+  resource_group_name        = azurerm_resource_group.rg.name
+  app_service_plan_id        = azurerm_service_plan.myAppservicePlan.id
+  storage_account_name       = azurerm_storage_account.mystorageaccount.name
+  storage_account_access_key = azurerm_storage_account.mystorageaccount.primary_access_key
+  os_type                    = "linux"
+  version                    = "~4"
 
   app_settings = {
+    APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.myAppInsight.connection_string
+    APPINSIGHTS_INSTRUMENTATIONKEY = azurerm_application_insights.myAppInsight.instrumentation_key
+    myEventHubReadConnectionAppSetting = "Endpoint=${azurerm_iothub.my-iot-hub.event_hub_events_endpoint};SharedAccessKeyName=${azurerm_iothub.my-iot-hub.shared_access_policy[0].key_name};SharedAccessKey=${azurerm_iothub.my-iot-hub.shared_access_policy[0].primary_key};EntityPath=${azurerm_iothub.my-iot-hub.event_hub_events_path}"
+    FUNCTIONS_WORKER_RUNTIME ="node" #Without this you won't be able to publish function
+    WEBSITE_RUN_FROM_PACKAGE =1
     DB_HOST = "${azurerm_mysql_flexible_server.database_server.name}.mysql.database.azure.com"
     DB_USER_NAME = azurerm_mysql_flexible_server.database_server.administrator_login
+    DB_DATABASE_NAME = var.db_name
     DB_PASSWORD = "@Microsoft.KeyVault(SecretUri=https://${azurerm_key_vault.myKeyVault.name}.vault.azure.net/secrets/DB-PASSWORD/${azurerm_key_vault_secret.example.version})"
+  }
+
+  site_config {
+    linux_fx_version = "node|14"
   }
 
   identity {
@@ -322,16 +327,10 @@ resource "azurerm_linux_function_app" "myFunction" {
   }
 }
 
-data "azurerm_linux_function_app" "myFunctionData" {
-  name                = azurerm_linux_function_app.myFunction.name
-  resource_group_name = azurerm_resource_group.rg.name
-  depends_on = [azurerm_linux_function_app.myFunction]
-}
-
 resource "azurerm_key_vault_access_policy" "example" {
   key_vault_id = azurerm_key_vault.myKeyVault.id
   tenant_id    = data.azurerm_client_config.current.tenant_id
-  object_id    = azurerm_linux_function_app.myFunction.identity[0].principal_id
+  object_id    = azurerm_function_app.myFunction.identity[0].principal_id
 
   secret_permissions = [
     "Get",
